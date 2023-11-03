@@ -1,0 +1,101 @@
+
+using { /Fortnite.com/Characters }
+using { /Fortnite.com/Devices }
+using { /Fortnite.com/Game }
+using { /Fortnite.com/Teams }
+using { /Verse.org/Simulation }
+using { /Verse.org/Simulation/Tags }
+using { /Verse.org/Random}
+using { /UnrealEngine.com/Temporary/UI }
+using { /Fortnite.com/UI }
+using { /UnrealEngine.com/Temporary/SpatialMath}
+
+# 1 - 2x Health - UEFN
+#       Class Change Device - Max Health 200
+# 2 - Double Jump - UEFN
+# 3 - Flying Power - UEFN
+#       Class Change Device - Allow Flight
+#       Set Flight Speed in Island Settings to 1.5
+# 4 - Instant Reload - UEFN
+#       Class Change Device - Enable Instant Reload
+# 5 - Invisibility - Verse
+#       Give Player Fortilla Keycard
+# 6 - Super Speed - UEFN
+#       Movement Mod. - Speed 3
+#       Movement Mod. - Activate on ClassChangeDevice Trigger
+
+AssignSuperpowersDevice := class(creative_device):
+    
+    @editable
+    var PlayerSpawners : []player_spawner_device = array{}
+    var Teams : []team = array{}
+
+    @editable
+    var ClassSelectDevices : []class_and_team_selector_device = array{}
+
+    @editable
+    var CardDetector : conditional_button_device = conditional_button_device{}
+
+    var PlayerClassMap : [fort_character]int = map{}
+
+
+    @editable
+    var Teleporters : []teleporter_device = array{}
+    
+    
+    # Runs when the device is started in a running game
+    OnBegin<override>()<suspends>:void=
+    
+        for (Teleporter : Teleporters):
+            Teleporter.TeleportedEvent.Subscribe(OnPlayerTeleported)
+
+        spawn:
+            CheckForCard()
+    
+    # Checks for a card and Player Class = 2 (Invis)
+    CheckForCard()<suspends>:void=
+        loop:
+            Sleep(1.0)
+            AllPlayers:=GetPlayspace().GetPlayers()
+            for(Player : AllPlayers){
+                if(IsAgent:agent = agent[Player], FortCharacter := Player.GetFortCharacter[], FortClass := PlayerClassMap[FortCharacter]){
+                    if(CardDetector.IsHoldingItem[Player] and (FortClass=5)){
+                        MakePlayerInvisible(IsAgent)
+                    } else {
+                        ShowPlayer(IsAgent)
+                    }
+                }
+            }
+
+    OnPlayerTeleported( InPlayer : agent ) : void =
+        #Print("Player Teleported")
+        if(Player := InPlayer, FortCharacter := Player.GetFortCharacter[]){
+            AssignRandomPower(InPlayer)   
+        }
+            
+
+    AssignRandomPower( InAgent : agent ) : void =
+        # Gets all class selector devices that are tagged and a random number
+        #AllClassSelectors := GetCreativeObjectsWithTag(class_selector_tag{})
+        var randomInt : int = GetRandomInt(0,ClassSelectDevices.Length-1)
+
+        # If the device tagged is of type: class_and_team_selector_device,
+        #   Assign a random class (superpower) to the player
+        if(ClassSelectDevice := class_and_team_selector_device[ClassSelectDevices[randomInt]]):
+            if (Player := InAgent, FortCharacter := Player.GetFortCharacter[] ):
+                ClassSelectDevice.ChangeClass(Player)
+                if(set PlayerClassMap[FortCharacter] = randomInt+1, playerClass := PlayerClassMap[FortCharacter]){
+                    Print("Assigning a random power - {randomInt+1}" )   
+                }
+
+
+    # 2 - Invisibility Power 
+    MakePlayerInvisible(Agent : agent) : void =
+        if(FC := Agent.GetFortCharacter[]){
+            FC.Hide()
+        }
+
+    ShowPlayer(Agent : agent) : void =
+        if(FC := Agent.GetFortCharacter[]){
+            FC.Show()
+        }
