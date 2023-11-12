@@ -1,0 +1,156 @@
+using { /Fortnite.com/Devices }
+using { /Fortnite.com/Characters }
+using { /Verse.org/Simulation }
+using { /UnrealEngine.com/Temporary/SpatialMath }
+using { /UnrealEngine.com/Temporary/Diagnostics }
+
+gameplayer := class:
+    Player : player
+    GamePlayerDevices : gameplayer_devices
+
+    NEAR_DISTANCE : float = 500.0
+    FAR_DISTANCE : float = 2500.0
+    GROUND_LEVEL : float = 2720.0
+    X_MAX : float = 8500.0
+    X_MIN : float = -13980.0
+    Y_MAX : float = 14625.0
+    Y_MIN : float = -8390.0
+
+    var Tele_X : float = 0.0
+    var Tele_Y : float = 0.0
+    var Tele_Z : float = 0.0
+    var Tele2_X : float = 0.0
+    var Tele2_Y : float = 0.0
+    var Tele2_Z : float = 0.0
+
+    var PortalPropNear<private> : creative_prop = creative_prop{}
+    var PortalPropFar<private> : creative_prop = creative_prop{}
+
+    Init():void=
+        ResetTeleporters()
+        GamePlayerDevices.NearTeleporter.Disable()
+        GamePlayerDevices.FarTeleporter.Disable()
+        GamePlayerDevices.FarTeleporter.TeleportedEvent.Subscribe(OnTeleported)
+        
+    OnRemotePressed(Agent : agent):void=
+        if:
+            Fort := Agent.GetFortCharacter[]
+            Tran := Fort.GetTransform()
+        then:
+            ResetTeleporters()
+            
+            GamePlayerDevices.NearTeleporter.Enable()
+            GamePlayerDevices.FarTeleporter.Enable()
+
+            var TeleLocation : vector3 = Fort.GetViewLocation() + Fort.GetViewRotation().GetLocalForward() * NEAR_DISTANCE
+            if (TeleLocation.X < X_MIN ) { set Tele_X = X_MIN } else if ( TeleLocation.X > X_MAX ) { set Tele_X = X_MAX } else { set Tele_X = TeleLocation.X }
+            if (TeleLocation.Y < Y_MIN ) { set Tele_Y = Y_MIN } else if ( TeleLocation.Y > Y_MAX ) { set Tele_Y = Y_MAX } else { set Tele_Y = TeleLocation.Y }
+            if (TeleLocation.Z < GROUND_LEVEL) { set Tele_Z = GROUND_LEVEL } else { set Tele_Z = TeleLocation.Z }
+            set TeleLocation = vector3{ X:= Tele_X, Y:= Tele_Y, Z:= Tele_Z }
+
+            var Tele2Location : vector3 = Fort.GetViewLocation() + Fort.GetViewRotation().GetLocalForward() * FAR_DISTANCE
+            if (Tele2Location.X < X_MIN ) { set Tele2_X = X_MIN } else if (Tele2Location.X > X_MAX ) { set Tele2_X = X_MAX } else { set Tele2_X = Tele2Location.X }
+            if (Tele2Location.Y < Y_MIN ) { set Tele2_Y = Y_MIN } else if (Tele2Location.Y > Y_MAX ) { set Tele2_Y = Y_MAX } else { set Tele2_Y = Tele2Location.Y }
+            if (Tele2Location.Z < GROUND_LEVEL) { set Tele2_Z = GROUND_LEVEL } else { set Tele2_Z = Tele2Location.Z }
+            set Tele2Location = vector3{ X:= Tele2_X, Y:= Tele2_Y, Z:= Tele2_Z }
+
+            if (GamePlayerDevices.NearTeleporter.TeleportTo[TeleLocation, Tran.Rotation]) {}
+            if (GamePlayerDevices.FarTeleporter.TeleportTo[Tele2Location, Tran.Rotation]) {}
+
+            # Spawn the portal props
+            if (GamePlayerDevices.ShowTeleporterPropVFX?):
+                if (set PortalPropNear = SpawnProp(GamePlayerDevices.TeleporterVFXProp, TeleLocation, Tran.Rotation)(0)?) {}
+                if (set PortalPropFar = SpawnProp(GamePlayerDevices.TeleporterVFXProp, Tele2Location, Tran.Rotation)(0)?) {}
+            
+
+    OnTeleported<private>(Agent : agent):void=
+        GamePlayerDevices.NearTeleporter.Disable()
+        GamePlayerDevices.FarTeleporter.Disable()
+        ResetTeleporters()
+
+    ResetTeleporters<private>():void=
+        if (PortalPropNear.IsValid[]) {PortalPropNear.Dispose()}
+        if (PortalPropFar.IsValid[]) {PortalPropFar.Dispose()}
+        if (GamePlayerDevices.NearTeleporter.TeleportTo[GamePlayerDevices.HomeLocation, IdentityRotation()]) {}
+        if (GamePlayerDevices.FarTeleporter.TeleportTo[GamePlayerDevices.HomeLocation, IdentityRotation()]) {}
+
+gameplayer_devices := class<concrete><unique>:
+    # Make sure these teleporters are linked to each other properly with groups
+    @editable NearTeleporter : teleporter_device = teleporter_device{}
+    @editable FarTeleporter : teleporter_device = teleporter_device{}
+    @editable TeleporterVFXProp : creative_prop_asset = DefaultCreativePropAsset
+    var IsAvailable : logic = true
+
+    @editable var ShowTeleporterPropVFX : logic = false
+    HomeLocation : vector3 = vector3{Z:=-5000.0}
+
+teleportation_manager := class(creative_device):
+
+    # Make sure there are enough of these to match the total player limit of the game
+    @editable GameplayerDevices : []gameplayer_devices = array{}
+
+    @editable ClassSelector : class_and_team_selector_device = class_and_team_selector_device{}
+    @editable RemoteManager : signal_remote_manager_device = signal_remote_manager_device{}
+
+    var GamePlayers : [player]gameplayer = map{}
+
+    OnBegin<override>()<suspends>:void=
+
+        GetPlayspace().PlayerRemovedEvent().Subscribe(OnPlayerRemoved)
+          
+        ClassSelector.ClassSwitchedEvent.Subscribe(OnPlayerSpawned)
+
+        RemoteManager.PrimarySignalEvent.Subscribe(OnRemotePressed)
+
+        # First time init because sometimes spawners have already spawned players
+        # Also needed for edit sessions when player doesn't spawn on pad
+        Sleep(0.5)
+        AllPlayers := GetPlayspace().GetPlayers()
+        for (Player : AllPlayers) {InitPlayer(Player)}
+
+    # Forward the event to the player
+    OnRemotePressed(Agent : agent):void=
+        if (Player := player[Agent], Gameplayer := GamePlayers[Player]):
+            Gameplayer.OnRemotePressed(Agent)
+
+    # Always use spawn events to init players instead of GetPlayspace().GetPlayers()
+    # or player joined server events because those can fire before the player is fully initialized
+    OnPlayerSpawned(Agent : agent):void=
+        if (Player := player[Agent]) { InitPlayer(Player)}
+            
+    InitPlayer(Player : player):void=
+        if (Existing := GamePlayers[Player]) {}
+        else:
+            # This is a new player joining the game
+            # Find them an available device, create a new gameplayer, then store it in the map
+            var AvailableDevice : ?gameplayer_devices = false
+            var IDX : int = 0
+            loop:
+                if (IDX >= GameplayerDevices.Length ) { break }
+                if (AD := GameplayerDevices[IDX], AD.IsAvailable?):
+                    set AvailableDevice = option{AD}
+                    if (set GameplayerDevices[IDX].IsAvailable = false) {}
+                    break
+                set IDX += 1
+            
+            if (AD := AvailableDevice?):
+                NewGamePlayer := gameplayer{Player := Player, GamePlayerDevices := AD}
+                NewGamePlayer.Init()
+                if (set GamePlayers[Player] = NewGamePlayer) {}
+                    
+    # We free a device so join in progress players can use it
+    # Then we remove the player from the map
+    OnPlayerRemoved(Player : player):void=
+        if (LeavingPlayer := GamePlayers[Player]):
+            # Free up the used device for other players
+            for (IDX := 0..GameplayerDevices.Length - 1):
+                if (Device := GameplayerDevices[IDX], Device = LeavingPlayer.GamePlayerDevices):
+                    if (set GameplayerDevices[IDX].IsAvailable = true) {}
+
+            # Remove the leaving player from the map        
+            var NewCustomPlayerMap:[player]gameplayer = map{}
+
+            for (Key -> Value : GamePlayers, Key <> Player):
+                set NewCustomPlayerMap = ConcatenateMaps(NewCustomPlayerMap, map{Key => Value})
+            
+            set GamePlayers = NewCustomPlayerMap 
